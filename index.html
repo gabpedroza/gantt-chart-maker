@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Simple Gantt (single-file)</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:18px;color:#111}
+  header{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+  input,button,select,textarea{font:inherit;padding:6px;border:1px solid #ccc;border-radius:6px}
+  .cols{display:grid;grid-template-columns:360px 1fr;gap:16px}
+  .card{background:#fff;border:1px solid #eee;padding:12px;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,0.02)}
+  table{width:100%;border-collapse:collapse}
+  td,th{padding:6px;border-bottom:1px solid #f2f2f2}
+  .gantt{overflow:auto;border-radius:6px;padding:8px;background:#fafafa}
+  svg{display:block}
+  .task-row{display:flex;align-items:center;gap:6px}
+  .small{font-size:13px;color:#666}
+  .controls{display:flex;gap:6px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>
+  <h2 style="margin:0">Simple Gantt</h2>
+  <div class="small">Single-file. Shareable codes embed full chart data.</div>
+</header>
+<div class="controls" style="margin-bottom:8px">
+  <button id="newBtn">New chart</button>
+  <button id="genBtn">Generate code</button>
+  <button id="copyLinkBtn">Copy share link</button>
+  <input id="loadCode" placeholder="Paste code and press Load" style="min-width:300px" />
+  <button id="loadBtn">Load</button>
+  <button id="exportBtn">Export JSON</button>
+  <button id="importBtn">Import JSON</button>
+</div>
+<div class="cols">
+  <div class="card">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input id="chartTitle" placeholder="Chart title" style="flex:1" />
+      <input id="owner" placeholder="Owner (optional)" style="width:140px" />
+    </div>
+    <div>
+      <table id="tasksTable">
+        <thead><tr><th>Task</th><th>Start</th><th>End</th><th>%</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <input id="newTaskName" placeholder="New task name" style="flex:1" />
+      <input id="newTaskStart" type="date" />
+      <input id="newTaskEnd" type="date" />
+      <button id="addTaskBtn">Add</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="small">Gantt preview (drag not implemented). Share the code produced by "Generate code" or copy link.</div>
+    <div class="gantt" id="ganttWrap" style="height:420px;margin-top:8px">
+      <svg id="ganttSVG" width="1200" height="380" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </div>
+</div>
+<script>
+// Simple encode/decode using base64 url-safe for portability without external libs.
+function encodeData(obj){const s=JSON.stringify(obj);const b=btoa(unescape(encodeURIComponent(s)));return b.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function decodeData(code){try{const padded=code + '=='.slice((code.length+3)%4);const b=padded.replace(/-/g,'+').replace(/_/g,'/');const s=decodeURIComponent(escape(atob(b)));return JSON.parse(s);}catch(e){return null}}
+
+// App state
+let state={title:'New chart',owner:'',tasks:[]};
+const tasksTbody=document.querySelector('#tasksTable tbody');
+const svg=document.getElementById('ganttSVG');
+
+function uid(){return Math.random().toString(36).slice(2,9)}
+function todayISO(){return new Date().toISOString().slice(0,10)}
+
+function renderTasks(){tasksTbody.innerHTML='';state.tasks.forEach(t=>{
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input value="${escapeHtml(t.name)}" data-id="${t.id}" class="tname" style="width:100%"></td>
+    <td><input type="date" value="${t.start}" data-id="${t.id}" class="tstart"></td>
+    <td><input type="date" value="${t.end}" data-id="${t.id}" class="tend"></td>
+    <td><input type="number" min="0" max="100" value="${t.progress||0}" data-id="${t.id}" class="tprog" style="width:72px"></td>
+    <td><button data-id="${t.id}" class="del">Del</button></td>`;
+  tasksTbody.appendChild(tr);
+});
+// attach events
+Array.from(document.querySelectorAll('.tname')).forEach(i=>i.oninput=e=>{const id=e.target.dataset.id;const task=state.tasks.find(x=>x.id===id);task.name=e.target.value;saveLocal();renderGantt();});
+Array.from(document.querySelectorAll('.tstart')).forEach(i=>i.onchange=e=>{const id=e.target.dataset.id;const task=state.tasks.find(x=>x.id===id);task.start=e.target.value;saveLocal();renderGantt();});
+Array.from(document.querySelectorAll('.tend')).forEach(i=>i.onchange=e=>{const id=e.target.dataset.id;const task=state.tasks.find(x=>x.id===id);task.end=e.target.value;saveLocal();renderGantt();});
+Array.from(document.querySelectorAll('.tprog')).forEach(i=>i.oninput=e=>{const id=e.target.dataset.id;const task=state.tasks.find(x=>x.id===id);task.progress=Number(e.target.value);saveLocal();renderGantt();});
+Array.from(document.querySelectorAll('.del')).forEach(b=>b.onclick=e=>{const id=e.target.dataset.id;state.tasks=state.tasks.filter(t=>t.id!==id);saveLocal();renderTasks();renderGantt();});
+}
+
+function addTask(name,start,end){state.tasks.push({id:uid(),name:name||'Task',start:start||todayISO(),end:end||todayISO(),progress:0,color:randomColor()});saveLocal();renderTasks();renderGantt();}
+
+function randomColor(){const h=Math.floor(Math.random()*360);return `hsl(${h} 80% 60%)`}
+
+function escapeHtml(s){return (s+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+
+function renderGantt(){// compute date range
+  if(state.tasks.length===0){svg.setAttribute('width',1000);svg.setAttribute('height',120);svg.innerHTML=`<text x="12" y="40" class="small">No tasks. Add tasks to see the timeline.</text>`;return}
+  const days=(d1,d2)=>Math.round((d2-d1)/(24*3600*1000));
+  const dates=state.tasks.flatMap(t=>[new Date(t.start),new Date(t.end)]);
+  let min=new Date(Math.min(...dates.map(d=>d.getTime())));
+  let max=new Date(Math.max(...dates.map(d=>d.getTime())));
+  // pad
+  min.setDate(min.getDate()-2); max.setDate(max.getDate()+2);
+  const totalDays=days(min,max)||1;
+  const dayW=18; const leftPad=160; const height= Math.max(120, state.tasks.length*40+40);
+  const width=leftPad + totalDays*dayW + 40;
+  svg.setAttribute('width',width); svg.setAttribute('height',height);
+  // header grid
+  let s='';
+  s+=`<style>text{font-family:system-ui;font-size:12px}</style>`;
+  // dates header
+  for(let d=0;d<=totalDays;d++){const cur=new Date(min);cur.setDate(min.getDate()+d);const x=leftPad + d*dayW; s+=`<text x="${x+4}" y="14">${cur.toISOString().slice(5,10)}</text>`; s+=`<rect x="${x}" y="18" width="${dayW}" height="${height-18}" fill="transparent" stroke="#eee"/>`;}
+  // tasks rows
+  state.tasks.forEach((t,i)=>{
+    const rowY=30 + i*36; const h=18;
+    const startIdx=days(min,new Date(t.start)); const dur=days(new Date(t.start),new Date(t.end))+1;
+    const x=leftPad + startIdx*dayW; const w=Math.max(2,dur*dayW);
+    s+=`<text x="12" y="${rowY+h-2}">${escapeHtml(t.name)}</text>`;
+    s+=`<rect x="${x}" y="${rowY}" rx="4" ry="4" width="${w}" height="${h}" fill="${t.color}" opacity="0.9" stroke="#333" stroke-opacity="0.06"></rect>`;
+    // progress overlay
+    const pw = Math.max(1, Math.round(w * ((t.progress||0)/100)));
+    s+=`<rect x="${x}" y="${rowY}" width="${pw}" height="${h}" fill="#000" fill-opacity="0.15"></rect>`;
+    s+=`<text x="${x + w + 6}" y="${rowY + h -2}" font-size="11">${t.progress||0}%</text>`;
+  });
+  svg.innerHTML=s;
+}
+
+// Save/Load using encoded code string. The code embeds all data. No server required.
+function generateCode(){const payload={v:1,title:state.title||'',owner:state.owner||'',tasks:state.tasks};return encodeData(payload)}
+function loadFromCode(code){const obj=decodeData(code);if(!obj){alert('Bad code');return false}state.title=obj.title||'Recovered chart';state.owner=obj.owner||'';state.tasks=obj.tasks||[];saveLocal();document.getElementById('chartTitle').value=state.title;document.getElementById('owner').value=state.owner;renderTasks();renderGantt();return true}
+
+// Local autosave (per-browser cache)
+function saveLocal(){try{localStorage.setItem('gantt_local', JSON.stringify(state));}catch(e){}
+}
+function loadLocal(){try{const s=localStorage.getItem('gantt_local');if(s){state=JSON.parse(s);document.getElementById('chartTitle').value=state.title||'';document.getElementById('owner').value=state.owner||'';renderTasks();renderGantt();return true}}catch(e){}return false}
+
+// wire UI
+document.getElementById('addTaskBtn').onclick=()=>{const n=document.getElementById('newTaskName').value||'Task';const s=document.getElementById('newTaskStart').value||todayISO();const e=document.getElementById('newTaskEnd').value||s;addTask(n,s,e);document.getElementById('newTaskName').value='';}
+
+document.getElementById('newBtn').onclick=()=>{state={title:'New chart',owner:'',tasks:[]};saveLocal();document.getElementById('chartTitle').value=state.title;document.getElementById('owner').value='';renderTasks();renderGantt();location.hash='';}
+
+document.getElementById('genBtn').onclick=()=>{const code=generateCode();prompt('Chart code (share this with team). You can also append it to the site URL as #c=CODE',code)}
+
+document.getElementById('copyLinkBtn').onclick=()=>{const code=generateCode();const link=location.origin + location.pathname + '#c=' + code;navigator.clipboard.writeText(link).then(()=>alert('Link copied to clipboard'))}
+
+document.getElementById('loadBtn').onclick=()=>{const c=document.getElementById('loadCode').value.trim();if(!c)return alert('Paste code first');loadFromCode(c)}
+
+document.getElementById('exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({title:state.title,owner:state.owner,tasks:state.tasks},null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=(state.title||'gantt')+'.json';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(u)}
+
+document.getElementById('importBtn').onclick=()=>{const f=document.createElement('input');f.type='file';f.accept='application/json';f.onchange=()=>{const file=f.files[0];if(!file)return;const r=new FileReader();r.onload=()=>{try{const obj=JSON.parse(r.result);state.title=obj.title||state.title;state.owner=obj.owner||'';state.tasks=obj.tasks||[];document.getElementById('chartTitle').value=state.title;document.getElementById('owner').value=state.owner;saveLocal();renderTasks();renderGantt();}catch(e){alert('Bad file')} };r.readAsText(file)};f.click();}
+
+// title/owner edits
+document.getElementById('chartTitle').oninput=e=>{state.title=e.target.value;saveLocal()}
+document.getElementById('owner').oninput=e=>{state.owner=e.target.value;saveLocal()}
+
+// on start: try URL hash or local
+function checkHash(){const h=location.hash.slice(1);if(!h) return false;const m=h.match(/c=([^&]+)/);if(m){const code=m[1];if(loadFromCode(code)){document.getElementById('loadCode').value=code;return true}}return false}
+
+// init
+if(!checkHash()){
+  if(!loadLocal()){state={title:'New chart',owner:'',tasks:[{id:uid(),name:'Example task',start:todayISO(),end:todayISO(),progress:0,color:randomColor()}]};saveLocal();}
+}
+renderTasks();renderGantt();
+
+// helpers: utf-8 safe atob/encodeURIComponent adapters used above
+// fallback for old browsers omitted for brevity.
+</script>
+</body>
+</html>
